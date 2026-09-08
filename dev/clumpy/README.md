@@ -1,149 +1,243 @@
-# CLUMPY–Gammapy tutorial development
+# CLUMPY J-factor and D-factor support in Gammapy
 
-## Goal
+This directory contains the development work for importing CLUMPY J-factor and D-factor products into Gammapy. The goal is to produce an official Gammapy-CLUMPY tutorial, together with the readers and validation tests required to support the workflow.
 
-Develop an official Gammapy tutorial showing how to import and use products generated with CLUMPY.
+The tutorial should guide users through products that can be converted directly into Gammapy spatial models. **This implementation therefore focuses on two-dimensional J- and D-factor maps and on the information required to interpret their physical quantity, units, geometry, components, and normalization.**
 
-The imported products should have well-defined:
+Our main references are:
 
-- physical quantities;
-- units and normalization;
-- angular conventions;
-- geometry and coordinate frame;
-- relation between spatial morphology and the integrated J- or D-factor.
-
-The current work is therefore focused on defining conventions, supported formats, and validation tests rather than on writing the final tutorial.
-
-## Reference material
-
-The implementation will be based on three existing code bases:
-
-1. Jaume's CLUMPY HEALPix-to-WCS conversion script, available in `dev/clumpy/prototypes/makeFitsImage_JaumeZuriaga.py`;
-2. the CTAO dSph analysis material available in the `ksp_dsph_material` GitLab repository;
-3. Titouan's exploratory notebook, available in `dev/clumpy/notebooks/tuto_clumpy_tgirault.ipynb`.
-
-Jaume's script reads full- or partial-sky CLUMPY HEALPix FITS products, projects them to a Cartesian WCS image, propagates selected metadata, and applies different normalization steps depending on whether the input values are differential in solid angle. Titouan's notebook explores the import of J- and D-factor maps for an individual non-Galactic target, their projection to WCS, creation of a normalized `TemplateSpatialModel`, and computation of an integrated factor. These are prototype workflows: their assumptions about map dimensions, pixel solid angle, units, coordinate metadata, and normalization still need to be inventoried and validated.
-
-The three implementations will first be analyzed separately and then compared.
+- the current CLUMPY development source and its in-tree documentation;
+- Jaume's code in `dev/clumpy/prototypes/makeFitsImage_JaumeZuriaga.py`;
+- Titouan's notebook in `dev/clumpy/notebooks/tuto_clumpy_tgirault.ipynb`;
+- the CTAO dSph analysis material in the `ksp_dsph_material` repository on GitLab;
+- the current Gammapy API.
 
 ## Scope
 
-Our implementation and tutorial should cover both Galactic and extragalactic CLUMPY use cases. The CLUMPY 4.0 mode terminology must be kept explicit during this inventory:
+This work will cover J- and D-factor maps for:
 
-- `-g` models the Galactic halo;
-- `-h` models one or more halos other than the Galactic halo, including an individual isolated target such as a dSph;
-- `-e` models extragalactic dark matter through the cosmological/extragalactic module.
+- the Galactic halo, either alone or combined in the same map with a user-defined list of additional halos;
+- a selected non-Galactic halo (e.g. a dwarf spheroidal galaxy or another isolated target).
 
-An individual non-Galactic halo selected with `-h` must therefore not be conflated with the `-e` extragalactic module. In particular, the local CLUMPY 4.0 source identifies `-h2` as `Jsm+<sub>(alpha_int)`, `-h3` as `Jsm+<sub>(theta)`, `-h4` as `2D-skymap Jsm+<sub>(halo)`, and `-h5` as `2D-skymap Jsm+sub(halo)`. The Titouan notebook is an exploratory `-h` workflow even though its current title uses “extragalactic sources.” The relevant `-e` products and the most useful tutorial-level extragalactic use case remain to be identified; this requirement is not satisfied merely by supporting a dSph through `-h`.
+In the current CLUMPY development source, these cases are handled by different modes:
 
-Based on Jaume's script, Titouan's notebook, and, mainly, on the CTAO dSph analysis material, we can define a preliminary list of products to investigate:
+1. `-g`: models the MW halo and additional galactic subhalos;
+2. `-h`: models extragalactic halos.
 
-- HEALPix J-factor maps;
-- HEALPix D-factor maps;
-- WCS J-factor maps;
-- WCS D-factor maps;
-- cumulative \(J(\alpha_{\rm int})\) profiles;
-- cumulative \(D(\alpha_{\rm int})\) profiles;
-- central estimates and uncertainty intervals for J- and D-factor profiles.
+NOTE: CLUMPY also provides a cosmological `-e` module for products such as halo-population calculations, extragalactic intensities, and absorption. Those products are not the J- or D-factor map products considered here and are outside the scope of this work. Here, “extragalactic target” refers to a halo represented individually or as part of a user-defined halo list, not to a cosmological `-e` simulation.
 
-The correspondence between these generic product classes and the outputs of each of the `-g`, `-h`, and `-e` modes must be documented rather than assumed. This includes determining how annihilation and decay selections are encoded and labeled in each relevant CLUMPY product.
+NOTE: Statistical products from CLUMPY's `-s` module, including confidence intervals for J and D, are also outside the initial tutorial scope. **They may become relevant in a later extension of the Gammapy dark-matter module together with appropriate likelihood treatment.**
 
-Uncertainty handling should be investigated after the basic import interface is established. The current branch provides `add_factor_prior`, which represents a J- or D-factor uncertainty through a prior on the dark-matter spectral model's scale parameter. This should be compared with the nuisance-parameter treatment in the CTAO dSph analysis, including the precise statistical interpretation of the quoted central values and intervals.
+## Initial implementation
 
-## Expected Gammapy representation
+The initial implementation should support:
 
-The following Gammapy representations are expected to be investigated:
+1. CLUMPY HEALPix J- and D-factor maps with values integrated over each pixel.
+2. CLUMPY HEALPix J- and D-factor maps with differential values in solid angle.
+3. Optional conversion of the imported HEALPix map to WCS within Gammapy, preserving the integrated J- or D-factor.
+4. Construction of a normalized `TemplateSpatialModel`, providing an associated integrated J- or D-factor.
 
-- `HpxNDMap` for HEALPix products;
-- `WcsNDMap` for WCS products;
-- `TemplateSpatialModel` for normalized spatial morphologies;
-- `DarkMatterAnnihilationSpectralModel` with an integrated J-factor;
-- `DarkMatterDecaySpectralModel` with an integrated D-factor.
 
-A key point to clarify is the separation
+## Relevant CLUMPY modes and products
 
-$$
+### Galactic maps
+
+| Mode | CLUMPY product |
+|-|-|
+| `-g5` | Two-dimensional smooth plus mean-substructure map |
+| `-g6` | `g5` product + supplied list of objects |
+| `-g7` | Two-dimensional map with drawn or resolved subhalos |
+| `-g8` | `g7` product + supplied list of objects |
+
+### Individual extragalactic halo maps
+
+| Mode | CLUMPY product |
+|-|-|
+| `-h4` | Two-dimensional smooth plus mean-substructure map |
+| `-h5` | Two-dimensional map including drawn subhalos |
+
+Modes `-h4` and `-h5` compute the map for one halo selected from the input halo definitions. Multi-halo maps are represented by `-g6` and `-g8`, which add a user-defined halo list to the Galactic map. The import workflow should therefore support both single-halo and multi-halo map products.
+
+## Product inventory
+
+| Priority | Product | CLUMPY quantity and format | Modes | Gammapy (possible) representations |
+|---|---|---|---|---|
+| Initial | Pixel-integrated J map | HEALPix FITS binary table, `JFACTOR` extension | `-g5` to `-g8`, `-h4`, `-h5` | `HpxNDMap` and `TemplateSpatialModel` |
+| Initial | Pixel-integrated D map | HEALPix FITS binary table, `DFACTOR` extension | `-g5` to `-g8`, `-h4`, `-h5` | `HpxNDMap` and `TemplateSpatialModel` |
+| Initial | Differential J map | HEALPix FITS binary table, `JFACTOR_PER_SR` extension | `-g5` to `-g8`, `-h4`, `-h5` | `HpxNDMap` and `TemplateSpatialModel` |
+| Initial | Differential D map | HEALPix FITS binary table, `DFACTOR_PER_SR` extension | `-g5` to `-g8`, `-h4`, `-h5` | `HpxNDMap` and `TemplateSpatialModel` |
+| Follow-up | Cumulative J or D profile | Integrated factor versus aperture | `-g2`, `-h2` | Integrated factor extraction and validation |
+| Follow-up | Differential angular profile | Factor per solid angle versus angular separation | `-g3`, `-h3` | Radial template construction |
+| Future DM module extension | Statistical J or D profile | Central estimates and confidence intervals | `-s6`, `-s7` | Likelihood or nuisance-parameter treatment not yet defined |
+
+NOTE: All map columns should (in my opinion) be preserved by a reader even if the first public interface selects the total component by default.
+
+## CLUMPY map conventions
+
+CLUMPY two-dimensional outputs are HEALPix FITS binary tables. They may be full-sky or partial-sky, use implicit or explicit pixel indexing, and use `RING` or `NESTED` ordering.
+
+For annihilation, native files can contain:
+
+- `JFACTOR`, with values integrated over each HEALPix pixel;
+- `JFACTOR_PER_SR`, with values averaged per unit solid angle;
+- columns such as `Jtot`, `Jsmooth`, `Jsub`, `Jcrossp`, `Jdrawn`, and `Jlist`, depending on the mode and configuration.
+
+Decay uses analogous files.
+
+Relevant FITS metadata (we should pay attention to these!) include:
+
+- `PIXTYPE`, `NSIDE`, `ORDERING`, `INDXSCHM`, and `COORDSYS`;
+- `SIMUMODE` and `DMMODEL`;
+- the selected unit convention;
+- target position, field of view, density profile, and substructure parameters.
+
+NOTE: the differential values are angular averages computed with CLUMPY's oversampling procedure. They must not be reinterpreted as a single line-of-sight evaluation at the pixel centre!
+
+## Physical conventions
+
+For annihilation,
+
+```math
+J(\Delta\Omega)
+=
+\int_{\Delta\Omega} d\Omega
+\int_{\mathrm{l.o.s.}} dl\,\rho^2.
+```
+
+For decay,
+
+```math
+D(\Delta\Omega)
+=
+\int_{\Delta\Omega} d\Omega
+\int_{\mathrm{l.o.s.}} dl\,\rho.
+```
+
+NOTE: CLUMPY does not include the particle-physics $1/(4\pi)$ term in J or D. The Gammapy import must not add or remove this factor.
+
+CLUMPY supports two unit families:
+
+| Convention | J | D |
+|---|---|---|
+| Particle physics | `GeV2 cm-5` | `GeV cm-2` |
+| Astrophysical | `M_sun2 kpc-5` | `M_sun kpc-2` |
+
+Differential values additionally carry `sr-1`. The reader should accept both unit families and convert them explicitly where required by a Gammapy model.
+
+### Pixel-integrated and differential maps
+
+For a pixel-integrated map,
+
+```math
+J_{\mathrm{int}} = \sum_i J_{\mathrm{pix},i}.
+```
+
+For a differential map,
+
+```math
+J_{\mathrm{int}}
+=
+\sum_i
+\left(\frac{dJ}{d\Omega}\right)_i
+\Delta\Omega_i.
+```
+
+The same definitions apply to D. Conversion between the two forms must use the solid angle of each pixel.
+
+### Spatial morphology and integrated factor
+
+The current Gammapy DM module treatment of J and D-factors separates morphology from normalization:
+
+```math
 \frac{dJ}{d\Omega}(\Omega)
 =
 J_{\mathrm{int}}\,T(\Omega),
-$$
+```
 
-where \(T(\Omega)\) is a normalized spatial template and \(J_{\mathrm{int}}\) is the integrated astrophysical factor.
+with
 
-The same structure applies to the D-factor.
+```math
+\int T(\Omega)\,d\Omega = 1.
+```
 
-## Compatibility with JFactory
+For pixel-integrated input,
 
-Compatibility with `JFactory` will initially be assessed at the semantic level:
+```math
+T_i
+=
+\frac{J_{\mathrm{pix},i}}
+{J_{\mathrm{int}}\,\Delta\Omega_i}.
+```
 
-- definition of the J- or D-factor;
-- differential versus integrated quantities;
-- physical units;
-- angular conventions;
-- map geometry;
-- target centre and observer geometry;
-- radial extent and integration domain.
+For differential input,
 
-The current branch includes a revised `JFactory` line-of-sight implementation that explicitly accounts for the near and far branches of the halo, together with numerical tests. This makes direct numerical comparison a concrete validation target, but does not by itself establish `JFactory` as the reference for CLUMPY products.
+```math
+T_i
+=
+\frac{1}{J_{\mathrm{int}}}
+\left(\frac{dJ}{d\Omega}\right)_i.
+```
 
-Before adopting such comparisons as reference tests, the profile parameters, integration boundaries, observer geometry, angular binning, and differential-versus-pixel-integrated convention must be matched explicitly between CLUMPY and `JFactory`.
+This distinction must be handled before creating a `TemplateSpatialModel` or converting the imported map to WCS. An optional HEALPix-to-WCS conversion must account for the input and output pixel solid angles and preserve the integrated J- or D-factor.
 
-## Validation strategy
+## Current Gammapy compatibility
 
-The first validation tests will focus on compatibility and self-consistency. The following checks should be considered:
+The CLUMPY-distributed example `$CLUMPY/data/jfactor_map_from_h5.fits` is not currently recognized by the generic `Map.read()` convention detector. It is a partial-sky, explicitly indexed, `NESTED`, `NSIDE=1024` file with a `PIXEL` column and `JFACTOR` and `JFACTOR_PER_SR` extensions.
 
-- conservation of the integrated J- or D-factor during map conversion;
-- conversion between values per solid angle and values integrated per pixel;
-- conservation under `RING`–`NESTED` reordering for HEALPix maps;
-- consistency between HEALPix and WCS representations;
-- consistency between a two-dimensional map and the corresponding cumulative \(J(\alpha)\) or \(D(\alpha)\) profile, where applicable;
-- normalization of spatial templates;
-- reconstruction of the physical map from a normalized template and an integrated factor;
-- consistency of target coordinates and coordinate-frame transformations;
-- stability with respect to angular resolution.
+This is an interface gap rather than a geometry limitation: Gammapy can represent partial-sky HEALPix maps, but it needs either a CLUMPY-specific reader or an additional recognized FITS convention.
 
-Uncertainty-related tests should be considered separately after the basic interface has been established.
+## Recommended implementation: reader and conversions
 
-## Proposed implementation phases
+I think that a  dedicated reader is preferable to placing CLUMPY-specific heuristics in the tutorial or in generic FITS-map detection. One CLUMPY file may contain multiple physical components, both pixel-integrated and per-solid-angle extensions, explicit pixel indices, and model metadata.
 
-### Phase 1 — Inventory and comparison
+The import and conversion workflow should:
 
-- document the products used by Jaume's script, the CTAO material, and Titouan's notebook;
-- classify each product and workflow by CLUMPY mode (`-g`, `-h`, or `-e`);
-- identify their physical meaning, units, geometry, and normalization;
-- record ambiguities and missing metadata;
-- compare the three existing workflows;
-- decide which Galactic, individual non-Galactic-halo, and extragalactic-module products should be covered by the tutorial.
+1. identify J or D from consistent headers, extensions, columns, and units;
+2. reconstruct full- or partial-sky HEALPix geometry;
+3. preserve ordering and coordinate metadata;
+4. deal with pixel-integrated and differential quantities without ambiguity;
+5. select components;
+6. convert native CLUMPY HEALPix maps to WCS when requested, accounting for the input and output pixel solid angles and preserving the integrated J- or D-factor;
+7. calculate an integrated factor over a declared region;
+8. produce a unit-normalized spatial template.
 
-### Phase 2 — Minimal product conventions
+An example of a possible high-level map interface is:
 
-- define the minimum CLUMPY input formats to support;
-- define the required FITS headers and table metadata;
-- decide how J- and D-factor products should be represented in Gammapy;
-- identify the conversions that can be performed safely.
+```python
+product = ClumpyMap.read(
+    filename,
+    factor="j",
+    component="total",
+    ...,
+)
+```
 
-### Phase 3 — Prototypes and validation
+The object could expose both the physical map and a normalized template, together with the integrated factor calculated over the selected region.
 
-- implement minimal Galactic and extragalactic prototypes, treating `-h` and `-e` use cases separately where appropriate;
-- test the selected map and profile conversions;
-- verify units, normalization, geometry, and self-consistency;
-- document any remaining limitations or ambiguities.
 
-### Phase 4 — Tutorial writing
+## To decide
 
-- select useful and self-contained examples from the validated exploratory notebooks and prototypes;
-- implement a dedicated official CLUMPY import/use tutorial in Gammapy's Sphinx-Gallery `.py` format under `examples/tutorials`;
-- add tests and small reference files;
-- add a short cross-reference from the basic dark-matter tutorial to the dedicated CLUMPY tutorial, rather than incorporating the full CLUMPY workflow there;
-- connect the new tutorial to the existing Gammapy dark-matter documentation.
+- Should CLUMPY support use a dedicated reader or a `Map.read()` FITS convention? (I prefer the reader idea :) )
+- Which CLUMPY versions and header variants must be supported?
+- Which physical component should be selected by default?
+
+
+## Tutorial dev
+
+Development will continue in notebooks and standalone prototypes. Once the map-inputs and validation tests are stable, the final contribution should be a Sphinx-Gallery tutorial under `examples/tutorials`. The basic dark-matter tutorial could contain only a short cross-reference to the dedicated CLUMPY workflow tutorial.
 
 ## References
 
-- the local CLUMPY 4.0 source and output conventions in `/home/jujuba/CLUMPY`, preferred over potentially outdated online documentation;
-- Gammapy dark-matter documentation;
-- Gammapy `JFactory`;
-- Gammapy `TemplateSpatialModel`;
-- Gammapy annihilation and decay spectral models and `add_factor_prior`;
-- Jaume's prototype conversion script, `dev/clumpy/prototypes/makeFitsImage_JaumeZuriaga.py`;
-- CTAO dSph analysis material;
-- Titouan's exploratory notebook, `dev/clumpy/notebooks/tuto_clumpy_tgirault.ipynb`.
+- the current CLUMPY development source and its in-tree documentation;
+- [CLUMPY repository](https://gitlab.com/clumpy/CLUMPY);
+- [CLUMPY two-dimensional map documentation](https://clumpy.gitlab.io/CLUMPY/v3.1.1/physics_2Dmaps.html);
+- [Gammapy HEALPix map documentation](https://docs.gammapy.org/dev/user-guide/maps/hpxmap.html);
+- [Gammapy `HpxMap`](https://docs.gammapy.org/dev/api/gammapy.maps.HpxMap.html);
+- [Gammapy `TemplateSpatialModel`](https://docs.gammapy.org/dev/api/gammapy.modeling.models.TemplateSpatialModel.html);
+- [Gammapy `JFactory`](https://docs.gammapy.org/dev/api/gammapy.astro.darkmatter.JFactory.html);
+- [Gammapy dark-matter tutorial](https://docs.gammapy.org/dev/tutorials/astrophysics/dark_matter_basics.html);
+- Jaume's prototype in `dev/clumpy/prototypes/makeFitsImage_JaumeZuriaga.py`;
+- Titouan's exploratory notebook in `dev/clumpy/notebooks/tuto_clumpy_tgirault.ipynb`;
+- CTAO dSph analysis material in the `ksp_dsph_material` repository.
+
+The current CLUMPY development source used in this work identifies its executable and generated FITS products as version 4.0, although its CMake project metadata declares version 3.2.0. The latest tagged release and public online documentation are version 3.1.1.
